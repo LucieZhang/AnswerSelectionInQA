@@ -24,8 +24,8 @@ if torch.cuda.is_available():
 else:
     classifier = AnswerSelection(pretrained_vocab.n_words, opt, is_train=False)
 
-load_network(classifier.encoder_a, 'encoder_question', '36', opt.pretraining_dir)
-load_network(classifier.encoder_b, 'encoder_candidates', '36', opt.pretraining_dir)
+load_network(classifier.encoder_a, 'encoder_question', 'latest', opt.pretraining_dir)
+load_network(classifier.encoder_b, 'encoder_candidates', 'latest', opt.pretraining_dir)
 
 # 测试 bs=1
 test_loader = DataServer(corpus_data, pretrained_vocab, opt, is_train=False, use_buckets=False, volatile=True)

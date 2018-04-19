@@ -38,10 +38,9 @@ if opt.pre_training:
     save_dir = opt.pretraining_dir
     # sts_corpus_path = os.path.join(opt.data_dir, '')
     sts_corpus_path = '../2016train_word_seg_rank.txt'
-    # pretrained_embed_path = './news12g_bdbk20g_nov90g_dim128.model'
     vocab, corpus_data = load_similarity_data(opt, sts_corpus_path, 'QA_train_corpus')
     init_embeddings = xavier_normal(torch.randn([vocab.n_words, 128])).numpy()
-    # Add FastText embeddings
+    # Add pretrained embeddings
     external_embeddings = add_pretrained_embeddings(
         init_embeddings, vocab, os.path.join(opt.data_dir, 'news12g_bdbk20g_nov90g_dim128.bin'))
 
@@ -92,7 +91,7 @@ for epoch in range(opt.num_epochs):
         if i % opt.report_freq == 0 and i != 0:
             running_avg_loss = sum(running_loss) / len(running_loss)
             print('Epoch: %d | Training Batch: %d | Average loss since batch %d: %.4f | Average acc %.4f' %
-                  (epoch, i, i - opt.report_freq, running_avg_loss, acc))  # sum(accs) / (len(accs) * s1_var.size(0))
+                  (epoch, i, i - opt.report_freq, running_avg_loss, sum(accs) / (len(accs) * s1_var.size(0))))
             running_loss = list()
 
     # Epoch summarize
@@ -104,8 +103,8 @@ for epoch in range(opt.num_epochs):
     print('time consumed %5.2f s' % (time.time() - epoch_start_time))
 
     # Validate each epoch
-    valid_batch_loss = []
-    if False:
+    if epoch >= opt.start_early_stopping:
+        valid_batch_loss = []
         total_valid_loss = list()
 
         valid_loader = DataServer([valid_data, valid_labels], vocab, opt, is_train=True, use_buckets=True,
@@ -117,35 +116,31 @@ for epoch in range(opt.num_epochs):
             s1_var, s2_var, s3_var, label_var = data
             distc, distd = classifier.test_step(s1_var, s2_var, s3_var, label_var)
             acc = accuracy(distc, distd, label_var)
-            accs.append(acc * s1_var.size(0))
+            accs.append(acc * s1_var.size(0))  # right numbers in a validation batch
             valid_batch_loss = classifier.loss.data[0]
             total_valid_loss.append(valid_batch_loss)
 
-            if i % opt.report_freq == 0 and i != 0:
-                valid_batch_loss = sum(total_valid_loss) / len(total_valid_loss)
-                print('Epoch: %d | Training Batch: %d | Average loss since batch %d: %.4f | Average acc %.4f' %
-                      (epoch, i, i - opt.report_freq, valid_batch_loss, sum(accs) / (len(accs) * s1_var.size(0))))
-                # valid_batch_loss = list()
-
         # Report fold statistics
-        # avg_valid_accuracy = sum(total_valid_loss) / len(total_valid_loss)
-        # print('Average validation fold accuracy at epoch %d: %.4f' % (epoch, avg_valid_accuracy))
+        avg_valid_loss = sum(total_valid_loss) / len(total_valid_loss)
+        avg_valid_accuracy = sum(accs) / (len(accs) * s1_var.size(0))  # total right numbers / total cases  at a epoch
+        print('Average validation fold loss at epoch %d: %.4f | Average validation accuracy: %.4f' %
+              (epoch, avg_valid_loss, avg_valid_accuracy))
         # Save network parameters if performance has improved
-        # if avg_valid_accuracy >= best_validation_accuracy:  # original: <= is wrong
-        #     epochs_without_improvement += 1
-        # else:
-        #     best_validation_accuracy = avg_valid_accuracy
-        #     epochs_without_improvement = 0
-        #     save_network(classifier.encoder_a, 'qa_classifier', 'latest', save_dir)
+        if avg_valid_accuracy <= best_validation_accuracy:
+            epochs_without_improvement += 1
+        else:
+            best_validation_accuracy = avg_valid_accuracy
+            epochs_without_improvement = 0
+            save_network(classifier.encoder_a, 'encoder_question', 'latest', save_dir)
+            save_network(classifier.encoder_b, 'encoder_candidates', 'latest', save_dir)
 
-    # if epoch >= opt.start_early_stopping:
-    #     loss_val = avg_valid_accuracy  # sum(total_valid_loss)
-    #     acc_val = avg_valid_accuracy
-    # else:
-    #     loss_val, acc_val = None, None
-    plotter.add_values(epoch, loss_train=avg_training_loss, acc_train=avg_training_accuracy
-                       )
-
+        # for plotting
+        loss_val = avg_valid_loss
+        acc_val = avg_valid_accuracy
+    else:
+        loss_val, acc_val = None, None
+    plotter.add_values(epoch, loss_train=avg_training_loss, acc_train=avg_training_accuracy,
+                       loss_val=loss_val, acc_val=acc_val)
     plotter.block()
 
     # Save network parameters at the end of each nth epoch
