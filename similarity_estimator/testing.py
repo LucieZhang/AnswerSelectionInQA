@@ -5,34 +5,35 @@ from similarity_estimator.networks import AnswerSelection
 from similarity_estimator.options import TestingOptions
 from similarity_estimator.sim_util import load_similarity_data
 from utils.data_server import DataServer
-from utils.init_and_storage import load_network, add_pretrained_embeddings
+from utils.init_and_storage import load_network
 import torch
 
 
 opt = TestingOptions()
-test_path = '../2016train_word_segmentation.txt'
+test_path = '../2016test_word_segmentation.txt'
+# train_path = '../2016train_word_seg_rank.txt'
 _, corpus_data = load_similarity_data(opt, test_path, 'qa_test', is_train=False)
+# _, pairwise_corpus_data = load_similarity_data(opt, train_path, 'training data', is_train=True)
 
 # Load pretrained parameters
 pretrained_path = os.path.join(opt.save_dir, 'pretraining/pretrained.pkl')
 with open(pretrained_path, 'rb') as f:
     pretrained_embeddings, pretrained_vocab = pickle.load(f)
 
-# Initialize the similarity classifier, original vocab size =
 if torch.cuda.is_available():
-    classifier = AnswerSelection(pretrained_vocab.n_words, opt, is_train=False).cuda()
+    selector = AnswerSelection(pretrained_vocab.n_words, opt, is_train=False).cuda()
 else:
-    classifier = AnswerSelection(pretrained_vocab.n_words, opt, is_train=False)
+    selector = AnswerSelection(pretrained_vocab.n_words, opt, is_train=False)
 
-load_network(classifier.encoder_a, 'encoder_question', 'latest', opt.pretraining_dir)
-load_network(classifier.encoder_b, 'encoder_candidates', 'latest', opt.pretraining_dir)
+# params = selector.encoder.state_dict()
+# print('the params before restored:')
+# print(params)
 
-# 测试 bs=1
+load_network(selector.encoder, 'encoder', 'latest', opt.pretraining_dir)
+
+# test bs=1
 test_loader = DataServer(corpus_data, pretrained_vocab, opt, is_train=False, use_buckets=False, volatile=True)
-
-# performance
-total_classification_divergence = 0.0
-total_classification_loss = 0.0
+# pairwise_test_loader = DataServer(pairwise_corpus_data, pretrained_vocab, opt, is_train=True, use_buckets=False, volatile=True)
 
 former_question = ' '
 candidate = {}
@@ -41,22 +42,58 @@ question_num = 0
 mrr = 0
 location = -1
 
+
+def accuracy(dista, distb, labels):
+    margin = 0
+    pred = (distb - dista - margin).cpu().data
+    data_labels = labels.cpu().data
+    count_sum = torch.mul(data_labels, pred).numpy()
+    # count=[1 for]
+    count = 0
+    for item in count_sum:
+        if item > 0:
+            count += 1
+    return count * 1.0 / dista.size()[0]
+#
+# accs = []
+#
+# for i, data in enumerate(pairwise_test_loader):
+#
+#     s1_var, s2_var, s3_var, label_var = data
+#
+#     sentence_a = ' '.join([pretrained_vocab.index_to_word[int(idx[0])] if idx[0] != 0 else '' for idx in
+#                            s1_var.data.numpy().tolist()])
+#     sentence_b = ' '.join([pretrained_vocab.index_to_word[int(idx[0])] if idx[0] != 0 else '' for idx in
+#                            s2_var.data.numpy().tolist()])
+#     sentence_c = ' '.join([pretrained_vocab.index_to_word[int(idx[0])] if idx[0] != 0 else '' for idx in
+#                            s3_var.data.numpy().tolist()])
+#
+#     pred1, pred2 = selector.test_step(s1_var, s2_var, s3_var, label_var)
+#
+#     acc = accuracy(pred1, pred2, label_var)
+#     accs.append(acc * s1_var.size(1))  # right numbers in a batch
+#
+#     print('Sample: %d\n'
+#               'Question: %s\n'
+#               'Candidate1: %s | Candidate2: %s\n'
+#               'Prediction1: %.8f | Prediction2: %.8f\n'
+#               'Ground truth: %.4f\n'
+#               'Loss: %.4f\n'
+#               %
+#               (i, sentence_a, sentence_b, sentence_c, pred1.data[0], pred2.data[0], label_var.data[0][0], selector.loss.data[0]))
+#
+# final_acc = sum(accs) / (len(accs) * opt.train_batch_size)
+# print('accuracy = %.4f' % final_acc)
+
+
 for i, data in enumerate(test_loader):
     if i >= opt.num_test_samples:
-        average_classification_divergence = total_classification_divergence / opt.num_test_samples
-        average_classification_loss = total_classification_loss / opt.num_test_samples
         accuracy = right_num / question_num
         mrr /= question_num
         print('right number = %d' % right_num)
         print('question number = %d' % question_num)
         print('Accuracy after examining %d samples = %.4f' % (opt.num_test_samples, accuracy))
         print('MRR after examining %d questions = %.4f' % (question_num, mrr))
-        # print('=================================================\n'
-        #       '= Testing concluded after examining %d samples. =\n'
-        #       '= Average classification divergence is %.4f.  =\n'
-        #       '= Average classification loss (MSE) is %.4f.  =\n'
-        #       '=================================================' %
-        #       (opt.num_test_samples, average_classification_divergence, average_classification_loss))
         break
 
     s1_var, s2_var, label_var = data
@@ -66,14 +103,13 @@ for i, data in enumerate(test_loader):
     sentence_b = ' '.join([pretrained_vocab.index_to_word[int(idx[0])] if idx[0] != 0 else '' for idx in
                            s2_var.data.numpy().tolist()])
 
-    classifier.qa_step(s1_var, s2_var, label_var)
-    prediction = classifier.get_score()
+    prediction = selector.qa_step(s1_var, s2_var, label_var)
 
     if sentence_a != former_question:  # start a new group
         question_num += 1
         if i != 0:
             # inverse = [(value, key) for key, value in candidate.items()]
-            rank = sorted(candidate.items(), key=lambda d: d[1][0], reverse=False)  # 应该选择距离最小者
+            rank = sorted(candidate.items(), key=lambda d: d[1][0], reverse=False)  # 应该选择距离最小
             # predict_right_pair = max(inverse)
             # predict_right_answer = predict_right_pair[1]
             if rank[0][1][1] == 1:
@@ -93,12 +129,6 @@ for i, data in enumerate(test_loader):
     if former_question == sentence_a:
         candidate[sentence_b] = (prediction.data[0].cpu().numpy(), label_var.data[0][0])
 
-    # loss = classifier.loss.data[0]
-
-    # divergence = abs((prediction - label_var).data[0])
-    # total_classification_divergence += divergence
-    # total_classification_loss += loss
-
     # if i % 200 == 0:
     print('Sample: %d\n'
               'Question: %s\n'
@@ -109,3 +139,7 @@ for i, data in enumerate(test_loader):
               # 'Loss: %.4f\n'
               %
               (i, sentence_a, sentence_b, prediction.data[0], label_var.data[0][0]))
+
+# params = selector.encoder.state_dict()
+# print('the params of the restored encoder is:')
+# print(params)

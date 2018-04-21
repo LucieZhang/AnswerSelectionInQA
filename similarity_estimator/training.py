@@ -11,9 +11,8 @@ from sklearn.svm import SVR
 
 from similarity_estimator.networks import AnswerSelection
 from similarity_estimator.options import TestingOptions
-# from similarity_estimator.sick_extender import SickExtender
 from similarity_estimator.sim_util import load_similarity_data
-from utils.init_and_storage import add_pretrained_embeddings, extend_embeddings, update_learning_rate, save_network
+from utils.init_and_storage import add_pretrained_embeddings, update_learning_rate, save_network
 from utils.parameter_initialization import xavier_normal
 
 from similarity_estimator.laplotter import LossAccPlotter
@@ -45,15 +44,13 @@ if opt.pre_training:
         init_embeddings, vocab, os.path.join(opt.data_dir, 'news12g_bdbk20g_nov90g_dim128.bin'))
 
     if torch.cuda.is_available():
-        classifier = AnswerSelection(vocab.n_words, opt, pretrained_embeddings=external_embeddings, is_train=True).cuda()
+        selector = AnswerSelection(vocab.n_words, opt, pretrained_embeddings=external_embeddings, is_train=True).cuda()
     else:
-        classifier = AnswerSelection(vocab.n_words, opt, pretrained_embeddings=external_embeddings, is_train=True)
+        selector = AnswerSelection(vocab.n_words, opt, pretrained_embeddings=external_embeddings, is_train=True)
 
-    classifier.initialize_parameters()
+    selector.initialize_parameters()
     # load the pre-trained embedding table
-    classifier.encoder_a.embedding_table.weight.data.copy_(external_embeddings)
-    classifier.encoder_b.embedding_table.weight.data.copy_(external_embeddings)
-    classifier.encoder_c.embedding_table.weight.data.copy_(external_embeddings)
+    selector.encoder.embedding_table.weight.data.copy_(external_embeddings)
 
 learning_rate = opt.learning_rate
 
@@ -62,8 +59,8 @@ epochs_without_improvement = 0
 final_epoch = 0
 
 train_data, valid_data, train_labels, valid_labels = train_test_split(corpus_data[0], corpus_data[1],
-                                                                      test_size=0.1, random_state=0)
-plotter = LossAccPlotter(title='Learning Curve', save_to_filepath='./img/learning_curve-att3.png',
+                                                                      test_size=0.3, random_state=0)
+plotter = LossAccPlotter(title='Learning Curve', save_to_filepath='./img/learning_curve-coattn2.png',
                          show_regressions=False,
                          show_averages=False, show_loss_plot=True, show_acc_plot=True, x_label='Epoch')
 
@@ -76,27 +73,30 @@ for epoch in range(opt.num_epochs):
                               use_buckets=True, volatile=False)
 
     accs = []
-
+    acc_len = 0
     for i, data in enumerate(train_loader):
+        # batchNum = i
         # running_loss = []  # for batch
         s1_var, s2_var, s3_var, label_var = data
 
-        dista, distb = classifier.train_step(s1_var, s2_var, s3_var, label_var)  # , prediction_positive_qa, newGroup)
+        dista, distb = selector.train_step(s1_var, s2_var, s3_var, label_var)  # , prediction_positive_qa, newGroup)
+
         acc = accuracy(dista, distb, label_var)
-        accs.append(acc * s1_var.size(0))  # right numbers in a batch
-        train_batch_loss = classifier.loss.data[0]  # batch_size * 1
+        accs.append(acc * s1_var.size(1))  # right numbers in a batch, but batch_size may differ at the end of an epoch
+        acc_len += s1_var.size(1)
+        train_batch_loss = selector.loss.data[0]  # batch_size * 1
         running_loss.append(train_batch_loss)
         total_train_loss.append(train_batch_loss)
 
         if i % opt.report_freq == 0 and i != 0:
             running_avg_loss = sum(running_loss) / len(running_loss)
             print('Epoch: %d | Training Batch: %d | Average loss since batch %d: %.4f | Average acc %.4f' %
-                  (epoch, i, i - opt.report_freq, running_avg_loss, sum(accs) / (len(accs) * s1_var.size(0))))
+                  (epoch, i, i - opt.report_freq, running_avg_loss, sum(accs) / acc_len))
             running_loss = list()
 
     # Epoch summarize
     avg_training_loss = sum(total_train_loss) / len(total_train_loss)
-    avg_training_accuracy = sum(accs) / (len(accs) * s1_var.size(0))
+    avg_training_accuracy = sum(accs) / acc_len  # (len(accs) * s1_var.size(1))  # size(1)
     print('Average training batch loss at epoch %d: %.4f | Average batch accuracy: %.4f' %
           (epoch, avg_training_loss, avg_training_accuracy))
 
@@ -112,17 +112,19 @@ for epoch in range(opt.num_epochs):
 
         # Validation
         accs = []
+        acc_len = 0
         for i, data in enumerate(valid_loader):
             s1_var, s2_var, s3_var, label_var = data
-            distc, distd = classifier.test_step(s1_var, s2_var, s3_var, label_var)
+            distc, distd = selector.test_step(s1_var, s2_var, s3_var, label_var)
             acc = accuracy(distc, distd, label_var)
-            accs.append(acc * s1_var.size(0))  # right numbers in a validation batch
-            valid_batch_loss = classifier.loss.data[0]
+            accs.append(acc * s1_var.size(1))  # right numbers in a validation batch
+            acc_len += s1_var.size(1)
+            valid_batch_loss = selector.loss.data[0]
             total_valid_loss.append(valid_batch_loss)
 
         # Report fold statistics
         avg_valid_loss = sum(total_valid_loss) / len(total_valid_loss)
-        avg_valid_accuracy = sum(accs) / (len(accs) * s1_var.size(0))  # total right numbers / total cases  at a epoch
+        avg_valid_accuracy = sum(accs) / acc_len  # total right numbers / total cases  at a epoch
         print('Average validation fold loss at epoch %d: %.4f | Average validation accuracy: %.4f' %
               (epoch, avg_valid_loss, avg_valid_accuracy))
         # Save network parameters if performance has improved
@@ -131,8 +133,8 @@ for epoch in range(opt.num_epochs):
         else:
             best_validation_accuracy = avg_valid_accuracy
             epochs_without_improvement = 0
-            save_network(classifier.encoder_a, 'encoder_question', 'latest', save_dir)
-            save_network(classifier.encoder_b, 'encoder_candidates', 'latest', save_dir)
+            save_network(selector.encoder, 'encoder', 'latest', save_dir)
+            # save_network(selector.encoder_b, 'encoder_candidates', 'latest', save_dir)
 
         # for plotting
         loss_val = avg_valid_loss
@@ -146,16 +148,14 @@ for epoch in range(opt.num_epochs):
     # Save network parameters at the end of each nth epoch
     if epoch % opt.save_freq == 0 and epoch != 0:
         print('Saving model networks after completing epoch %d' % epoch)
-        save_network(classifier.encoder_a, 'encoder_question', epoch, save_dir)
-        save_network(classifier.encoder_b, 'encoder_candidates', epoch, save_dir)
+        save_network(selector.encoder, 'encoder', epoch, save_dir)
+        # save_network(selector.encoder_b, 'encoder_candidates', epoch, save_dir)
 
     # Anneal learning rate:
     if epochs_without_improvement == opt.start_annealing:
         old_learning_rate = learning_rate
         learning_rate *= opt.annealing_factor
-        update_learning_rate(classifier.optimizer_a, learning_rate)
-        update_learning_rate(classifier.optimizer_b, learning_rate)
-        update_learning_rate(classifier.optimizer_c, learning_rate)
+        update_learning_rate(selector.optimizer, learning_rate)
         print('Learning rate has been updated from %.4f to %.4f' % (old_learning_rate, learning_rate))
 
     # Terminate training early, if no improvement has been observed for n epochs
@@ -171,41 +171,8 @@ print('Training procedure concluded after %d epochs total. Best validated epoch:
 if opt.pre_training:
     # Save pretrained embeddings and the vocab object
     pretrained_path = os.path.join(save_dir, 'pretrained.pkl')
-    pretrained_embeddings = classifier.encoder_a.embedding_table.weight.data  # b is different with a, need modification
+    pretrained_embeddings = selector.encoder.embedding_table.weight.data
     with open(pretrained_path, 'wb') as f:
         pickle.dump((pretrained_embeddings, vocab), f)
     print('Pre-trained parameters saved to %s' % pretrained_path)
 
-if not opt.pre_training:
-    ''' Regression step over the training set to improve the predictive power of the model'''
-    # Obtain similarity score predictions for each item within the training corpus
-    labels = list()
-    predictions = list()
-
-    # Initiate the training data loader
-    train_loader = DataServer([train_data, train_labels], vocab, opt, is_train=True, volatile=True)
-
-    # Obtaining predictions
-    for i, data in enumerate(train_loader):
-        # Obtain data
-        s1_var, s2_var, label_var = data
-        labels += [l[0] for l in label_var.data.numpy().tolist()]
-        classifier.test_step(s1_var, s2_var, label_var)
-        batch_predict = classifier.prediction.data.squeeze().numpy().tolist()
-        predictions += batch_predict
-
-    labels = np.array(labels)
-    predictions = np.array(predictions).reshape(-1, 1)
-
-    # Fit an SVR (following the scikit-learn tutorial)
-    sim_svr = GridSearchCV(SVR(kernel='rbf', gamma=0.1), cv=5, param_grid={"C": [1e0, 1e1, 1e2, 1e3],
-                                                                           "gamma": np.logspace(-2, 2, 5)})
-
-    sim_svr.fit(predictions, labels)
-    print('SVR complexity and bandwidth selected and model fitted successfully.')
-
-    # Save trained SVR model
-    svr_path = os.path.join(save_dir, 'sim_svr.pkl')
-    with open(svr_path, 'wb') as f:
-        pickle.dump(sim_svr, f)
-    print('Trained SVR model saved to %s' % svr_path)
