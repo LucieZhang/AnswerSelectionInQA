@@ -14,6 +14,7 @@ from similarity_estimator.options import TestingOptions
 from similarity_estimator.sim_util import load_similarity_data
 from utils.init_and_storage import add_pretrained_embeddings, update_learning_rate, save_network
 from utils.parameter_initialization import xavier_normal
+from torch.optim.lr_scheduler import ReduceLROnPlateau
 
 from similarity_estimator.laplotter import LossAccPlotter
 
@@ -63,6 +64,9 @@ train_data, valid_data, train_labels, valid_labels = train_test_split(corpus_dat
 plotter = LossAccPlotter(title='Learning Curve', save_to_filepath='./img/learning_curve-coattn2.png',
                          show_regressions=False,
                          show_averages=False, show_loss_plot=True, show_acc_plot=True, x_label='Epoch')
+
+scheduler = ReduceLROnPlateau(selector.optimizer, 'min', verbose=True)
+fo = open('./performance.txt', 'w', encoding='utf-8')
 
 for epoch in range(opt.num_epochs):
     epoch_start_time = time.time()
@@ -139,6 +143,8 @@ for epoch in range(opt.num_epochs):
         # for plotting
         loss_val = avg_valid_loss
         acc_val = avg_valid_accuracy
+
+        fo.write('loss_val:\t' + str(loss_val) + '\tloss_acc:\t' + str(acc_val) + '\n')
     else:
         loss_val, acc_val = None, None
     plotter.add_values(epoch, loss_train=avg_training_loss, acc_train=avg_training_accuracy,
@@ -153,10 +159,11 @@ for epoch in range(opt.num_epochs):
 
     # Anneal learning rate:
     if epochs_without_improvement == opt.start_annealing:
-        old_learning_rate = learning_rate
-        learning_rate *= opt.annealing_factor
-        update_learning_rate(selector.optimizer, learning_rate)
-        print('Learning rate has been updated from %.4f to %.4f' % (old_learning_rate, learning_rate))
+        # old_learning_rate = learning_rate
+        # learning_rate *= opt.annealing_factor
+        # update_learning_rate(selector.optimizer, learning_rate)
+        # print('Learning rate has been updated from %.4f to %.4f' % (old_learning_rate, learning_rate))
+        scheduler.step(loss_val)
 
     # Terminate training early, if no improvement has been observed for n epochs
     if epochs_without_improvement >= opt.patience:
@@ -165,6 +172,7 @@ for epoch in range(opt.num_epochs):
         final_epoch = epoch
         break
 
+fo.close()
 print('Training procedure concluded after %d epochs total. Best validated epoch: %d.'
       % (final_epoch, final_epoch - opt.patience))
 

@@ -15,7 +15,9 @@ class TestingOptions(object):
 
         # Network
         self.embedding_dims = 128
+        self.embedding_dims_char = 200
         self.hidden_dims = 50
+        self.hidden_dims_char = 50
         self.num_layers = 1
         self.train_batch_size = 20
         self.test_batch_size = 1
@@ -31,16 +33,16 @@ class TestingOptions(object):
         self.dropout = 0.5
 
         self.pre_training = True
-        self.num_epochs = 40  # 100
+        self.num_epochs = 30  # 100
 
         self.start_early_stopping = 2  # 2
-        self.patience = 20
+        self.patience = 10
         self.start_annealing = 4
-        self.annealing_factor = 0.75
+        self.annealing_factor = 0.5
 
         # Training
         self.report_freq = 1
-        self.save_freq = 4
+        self.save_freq = 1
         # self.home_dir = os.path.join(os.path.dirname(__file__), '..')
         self.home_dir = os.path.dirname(__file__)
         self.data_dir = os.path.join(self.home_dir, 'data')
@@ -49,5 +51,5 @@ class TestingOptions(object):
         self.pretraining_dir = os.path.join(self.save_dir, 'pretraining')
 
         # Testing
-        self.num_test_samples = 1577  # 76567
+        self.num_test_samples = 1000  # 76567
 

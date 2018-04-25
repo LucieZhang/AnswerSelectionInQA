@@ -29,6 +29,8 @@ class Indexer(object):
         else:
             self.word_to_count[word] += 1
 
+    # def add_char(self, word):
+
     def set_target_len(self, value):
         self.target_len = value
 
@@ -93,14 +95,14 @@ def perform_bucketing(opt, labeled_pair_list, is_train=True):
     return buckets, bucketed
 
 
-def load_similarity_data(opt, corpus_location, corpus_name, is_train=True):
+def load_similarity_data(opt, corpus_location, corpus_name, is_train=True, is_dbqa=False):
 
     if is_train:
         df_sim = pd.read_table(corpus_location, sep='\t', header=None, encoding='utf-8', error_bad_lines=False,
-                               names=['question', 'triple1', 'triple2', 'label'], skip_blank_lines=True, engine='python', nrows=1500)
+                               names=['question', 'triple1', 'triple2', 'label'], skip_blank_lines=True, engine='python', nrows=500)
     else:
         df_sim = pd.read_table(corpus_location, sep='\t', header=None, encoding='utf-8', error_bad_lines=False,
-                               names=['question', 'triple1', 'label'], skip_blank_lines=True, engine='python', nrows=1582)
+                               names=['question', 'triple1', 'label'], skip_blank_lines=True, engine='python', nrows=1010)
 
     sim_data = [[], []]
     sim_sents = list()
@@ -112,14 +114,25 @@ def load_similarity_data(opt, corpus_location, corpus_name, is_train=True):
         sent_triple1 = df_sim.iloc[i, 1].strip()
         if is_train:
             sent_triple2 = df_sim.iloc[i, 2].strip()
-        sent_sub1 = sent_triple1[:sent_triple1.index(' |||')]
-        sent_pre_ans1 = sent_triple1[sent_triple1.index(' ||| ') + 5:]  # 去掉三元组主语
-        if is_train:
-            sent_pre_ans2 = sent_triple2[sent_triple2.index(' |||') + 5:]
-        sent_a = sent_question
-        sent_b = sent_pre_ans1[:sent_pre_ans1.index(' |||')]  # 提取主语+谓词/去掉主语
-        if is_train:
-            sent_b2 = sent_pre_ans2[:sent_pre_ans2.index(' |||')]
+
+        if is_dbqa:
+            sent_a = str(sent_question)
+            sent_b = str(sent_triple1)
+            if is_train:
+                sent_b2 = str(sent_triple2)
+        else:
+            try:
+                sent_sub1 = sent_triple1[:sent_triple1.index(' |||')]
+                sent_pre_ans1 = sent_triple1[sent_triple1.index(' ||| ') + 5:]  # 去掉三元组主语
+                if is_train:
+                    sent_pre_ans2 = sent_triple2[sent_triple2.index(' |||') + 5:]
+                    sent_b2 = sent_pre_ans2[:sent_pre_ans2.index(' |||')]
+                sent_a = sent_question
+                sent_b = sent_pre_ans1[:sent_pre_ans1.index(' |||')]  # 提取主语+谓词/去掉主语
+            except ValueError:
+                print('skip:\t' + sent_question + '\t' + sent_triple1)
+                continue
+
         # len_sub = len(sent_sub)
         # if is_train:
         #     if sent_sub in sent_question:

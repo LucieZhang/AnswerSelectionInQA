@@ -18,27 +18,32 @@ class LSTMEncoder(nn.Module):
     def __init__(self, vocab_size, opt, is_train=False):
         super(LSTMEncoder, self).__init__()
         self.vocab_size = vocab_size
+        # self.char_size = char_size
         self.opt = opt
         # self.batch_size = batch_size
         self.name = 'sentence representation'
 
         self.embedding_table = nn.Embedding(num_embeddings=self.vocab_size, embedding_dim=self.opt.embedding_dims,
                                             padding_idx=0, max_norm=None, scale_grad_by_freq=False, sparse=False)
-        self.lstm_rnn = nn.LSTM(input_size=self.opt.embedding_dims, hidden_size=self.opt.hidden_dims, num_layers=1,
-                                bidirectional=False, bias=False, batch_first=True)
+        # self.embedding_table_char = nn.Embedding(num_embeddings=self.char_size, embedding_dim=self.opt.embedding_dims_char,
+        #                                          padding_idx=0, max_norm=None, scale_grad_by_freq=False, sparse=False)
+        self.lstm_word = nn.LSTM(input_size=self.opt.embedding_dims, hidden_size=self.opt.hidden_dims, num_layers=1,
+                                 dropout=0.5, bidirectional=True, batch_first=True)
+        # self.lstm_char = nn.LSTM(input_size=self.opt.embedding_dims_char, hidden_size=self.opt.hidden_dims_char,
+        #                          num_layers=1, bidirectional=False, bias=False, batch_first=True)
         # Self Attention Layers
-        self.S1 = nn.Linear(self.opt.hidden_dims, self.opt.hidden_dims, bias=True)
+        self.S1 = nn.Linear(self.opt.hidden_dims * 2, self.opt.hidden_dims * 2, bias=True)
         self.init_weights()
         # self.initialize_hidden_plus_cell(self.batch_size)
 
     def initialize_hidden_plus_cell(self, batch_size):
 
         if torch.cuda.is_available():
-            zero_hidden = Variable(torch.zeros(1, batch_size, self.opt.hidden_dims).cuda(), requires_grad=True)
-            zero_cell = Variable(torch.zeros(1, batch_size, self.opt.hidden_dims).cuda(), requires_grad=True)
+            zero_hidden = Variable(torch.zeros(2, batch_size, self.opt.hidden_dims).cuda(), requires_grad=True)
+            zero_cell = Variable(torch.zeros(2, batch_size, self.opt.hidden_dims).cuda(), requires_grad=True)
         else:
-            zero_hidden = Variable(torch.zeros(1, batch_size, self.opt.hidden_dims), requires_grad=True)
-            zero_cell = Variable(torch.zeros(1, batch_size, self.opt.hidden_dims), requires_grad=True)
+            zero_hidden = Variable(torch.zeros(2, batch_size, self.opt.hidden_dims), requires_grad=True)
+            zero_cell = Variable(torch.zeros(2, batch_size, self.opt.hidden_dims), requires_grad=True)
 
         return zero_hidden, zero_cell
 
@@ -48,13 +53,13 @@ class LSTMEncoder(nn.Module):
 
     def attention(self, output_q, output_c, batch_size, seq_len):
         if torch.cuda.is_available():
-            attn_Q = Variable(torch.zeros(batch_size, seq_len * self.opt.hidden_dims).cuda())
-            attn_C = Variable(torch.zeros(batch_size, seq_len * self.opt.hidden_dims).cuda())
+            attn_Q = Variable(torch.zeros(batch_size, seq_len * self.opt.hidden_dims * 2).cuda())
+            attn_C = Variable(torch.zeros(batch_size, seq_len * self.opt.hidden_dims * 2).cuda())
             # penal = Variable(torch.zeros(1).cuda())
             # I = Variable(torch.eye(self.opt.r).cuda())
         else:
-            attn_Q = Variable(torch.zeros(batch_size, seq_len * self.opt.hidden_dims))
-            attn_C = Variable(torch.zeros(batch_size, seq_len * self.opt.hidden_dims))
+            attn_Q = Variable(torch.zeros(batch_size, seq_len * self.opt.hidden_dims * 2))
+            attn_C = Variable(torch.zeros(batch_size, seq_len * self.opt.hidden_dims * 2))
             # penal = Variable(torch.zeros(1))
             # I = Variable(torch.eye(self.opt.r))
         # weights = {}
@@ -83,15 +88,15 @@ class LSTMEncoder(nn.Module):
         output = self.embedding_table(input_Q)
         c_output = self.embedding_table(input_C)  # .view(batch_size, 1, -1)
         for _ in range(self.opt.num_layers):
-            output, (hidden_Q, cell_Q) = self.lstm_rnn(output, (hidden_Q, cell_Q))
-            c_output, (hidden_C, cell_C) = self.lstm_rnn(c_output, (hidden_C, cell_C))
+            output, (hidden_Q, cell_Q) = self.lstm_word(output, (hidden_Q, cell_Q))
+            c_output, (hidden_C, cell_C) = self.lstm_word(c_output, (hidden_C, cell_C))
 
         attn_Q1, attn_C = self.attention(output, c_output, batch_size, input_Q.size(1))
         if is_train:
             input_C2 = torch.transpose(input_C2, 0, 1)
             c2_output = self.embedding_table(input_C2)
             for _ in range(self.opt.num_layers):
-                c2_output, (hidden_C2, cell_C2) = self.lstm_rnn(c2_output, (hidden_C2, cell_C2))
+                c2_output, (hidden_C2, cell_C2) = self.lstm_word(c2_output, (hidden_C2, cell_C2))
             attn_Q2, attn_C2 = self.attention(output, c2_output, batch_size, input_Q.size(1))
 
             return attn_Q1, attn_C, attn_Q2, attn_C2
