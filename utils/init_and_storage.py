@@ -27,6 +27,19 @@ def add_pretrained_embeddings(embedding_table, target_vocab, pretrained_vec_file
             except KeyError:
                 continue
 
+        # # add the rest extra words
+        # for line in in_file:
+        #     entries = line.split()
+        #     if len(entries) != 300
+        #         continue
+        #     word = entries[0]
+        #     vec = [float(n) for n in entries[1:]]
+        #     len_vocab = embedding_table.size(0)
+        #     try:
+        #         if word not in target_vocab.word_to_index:
+        #             len_vocab += 1
+        #             embedding_table[len_vocab][:] =
+
     return torch.FloatTensor(embedding_table)
 
 
@@ -122,7 +135,6 @@ def save_network(network, network_label, active_epoch, save_directory):
     """ Saves the parameters of the specified network under the specified path. """
     file_name = '%s_%s' % (str(active_epoch), network_label)
     save_path = os.path.join(save_directory, file_name)
-    # save_path = '../try_save'
     if torch.cuda.is_available():
         torch.save(network.state_dict(), save_path)  # turn cpu to gpu
     else:
@@ -135,6 +147,5 @@ def load_network(network, network_label, target_epoch, load_directory):
     """ Helper function for loading network work. """
     load_filename = '%s_%s' % (str(target_epoch), network_label)
     load_path = os.path.join(load_directory, load_filename)
-    # load_path = '../try_save'
     network.load_state_dict(torch.load(load_path))
     print('Network %s, version %s loaded from location %s' % (network_label, target_epoch, load_path))

@@ -34,24 +34,32 @@ def accuracy(dista, distb, labels):
 
 opt = TestingOptions()
 
-if opt.pre_training:
-    save_dir = opt.pretraining_dir
-    # sts_corpus_path = os.path.join(opt.data_dir, '')
-    sts_corpus_path = '../2016train_word_seg_rank.txt'
-    vocab, corpus_data = load_similarity_data(opt, sts_corpus_path, 'QA_train_corpus')
-    init_embeddings = xavier_normal(torch.randn([vocab.n_words, 128])).numpy()
-    # Add pretrained embeddings
-    external_embeddings = add_pretrained_embeddings(
-        init_embeddings, vocab, os.path.join(opt.data_dir, 'news12g_bdbk20g_nov90g_dim128.bin'))
+save_dir = opt.pretraining_dir
+# sts_corpus_path = os.path.join(opt.data_dir, '')
+sts_corpus_path = '../2016train_word_seg_rank.txt'
+# sts_corpus_path = 'E:/Lucy/Dissertation/code/ChineseKBQA/Data/NLPCC2017-OpenDomainQA/data/dbqa_word_seg.txt'
+sts_char_path = '../../../Data/2016train_char_seg.txt'
+vocab, corpus_data = load_similarity_data(opt, sts_corpus_path, 'QA_train_corpus', is_dbqa=False)
+vocab_char, _ = load_similarity_data(opt, sts_char_path, 'character_corpus', is_dbqa=False)
+init_embeddings = xavier_normal(torch.randn([vocab.n_words, 300])).numpy()
+init_embeddings_char = xavier_normal(torch.randn([vocab_char.n_words, 200])).numpy()
+# Add pretrained embeddings
+external_embeddings = add_pretrained_embeddings(
+    init_embeddings, vocab, os.path.join(opt.data_dir, 'wiki.zh.bin'))
+external_embeddings_char = add_pretrained_embeddings(
+    init_embeddings_char, vocab_char, os.path.join(opt.data_dir, 'char-vec200.bin'))
 
-    if torch.cuda.is_available():
-        selector = AnswerSelection(vocab.n_words, opt, pretrained_embeddings=external_embeddings, is_train=True).cuda()
-    else:
-        selector = AnswerSelection(vocab.n_words, opt, pretrained_embeddings=external_embeddings, is_train=True)
+if torch.cuda.is_available():
+    selector = AnswerSelection(vocab.n_words, vocab_char.n_words, opt, pretrained_embeddings=external_embeddings,
+                               pre_char_embed=external_embeddings_char, is_train=True).cuda()
+else:
+    selector = AnswerSelection(vocab.n_words, vocab_char.n_words, opt, pretrained_embeddings=external_embeddings,
+                               pre_char_embed=external_embeddings_char, is_train=True)
 
-    selector.initialize_parameters()
-    # load the pre-trained embedding table
-    selector.encoder.embedding_table.weight.data.copy_(external_embeddings)
+selector.initialize_parameters()
+# load the pre-trained embedding table
+selector.encoder.embedding_table.weight.data.copy_(external_embeddings)
+selector.encoder.embedding_table_char.weight.data.copy_(external_embeddings_char)
 
 learning_rate = opt.learning_rate
 
@@ -61,11 +69,11 @@ final_epoch = 0
 
 train_data, valid_data, train_labels, valid_labels = train_test_split(corpus_data[0], corpus_data[1],
                                                                       test_size=0.3, random_state=0)
-plotter = LossAccPlotter(title='Learning Curve', save_to_filepath='./img/learning_curve-coattn2.png',
+plotter = LossAccPlotter(title='Learning Curve', save_to_filepath='./img/learning_curve-coattn3.png',
                          show_regressions=False,
                          show_averages=False, show_loss_plot=True, show_acc_plot=True, x_label='Epoch')
 
-scheduler = ReduceLROnPlateau(selector.optimizer, 'min', verbose=True)
+scheduler = ReduceLROnPlateau(selector.optimizer, 'max', verbose=True, patience=3)
 fo = open('./performance.txt', 'w', encoding='utf-8')
 
 for epoch in range(opt.num_epochs):
@@ -73,7 +81,7 @@ for epoch in range(opt.num_epochs):
     running_loss = list()
     total_train_loss = list()  # for epoch
 
-    train_loader = DataServer([train_data, train_labels], vocab, opt, shuffle=opt.shuffle, is_train=True,
+    train_loader = DataServer([train_data, train_labels], vocab, vocab_char, opt, shuffle=opt.shuffle, is_train=True,
                               use_buckets=True, volatile=False)
 
     accs = []
@@ -81,9 +89,9 @@ for epoch in range(opt.num_epochs):
     for i, data in enumerate(train_loader):
         # batchNum = i
         # running_loss = []  # for batch
-        s1_var, s2_var, s3_var, label_var = data
+        s1_var, s2_var, s3_var, c1_var, c2_var, c3_var, label_var = data
 
-        dista, distb = selector.train_step(s1_var, s2_var, s3_var, label_var)  # , prediction_positive_qa, newGroup)
+        dista, distb = selector.train_step(s1_var, s2_var, s3_var, c1_var, c2_var, c3_var, label_var)  # , prediction_positive_qa, newGroup)
 
         acc = accuracy(dista, distb, label_var)
         accs.append(acc * s1_var.size(1))  # right numbers in a batch, but batch_size may differ at the end of an epoch
@@ -101,7 +109,7 @@ for epoch in range(opt.num_epochs):
     # Epoch summarize
     avg_training_loss = sum(total_train_loss) / len(total_train_loss)
     avg_training_accuracy = sum(accs) / acc_len  # (len(accs) * s1_var.size(1))  # size(1)
-    print('Average training batch loss at epoch %d: %.4f | Average batch accuracy: %.4f' %
+    print('Average training batch loss at epoch %d: %.4f | Average training accuracy: %.4f' %
           (epoch, avg_training_loss, avg_training_accuracy))
 
     print('time consumed %5.2f s' % (time.time() - epoch_start_time))
@@ -111,15 +119,15 @@ for epoch in range(opt.num_epochs):
         valid_batch_loss = []
         total_valid_loss = list()
 
-        valid_loader = DataServer([valid_data, valid_labels], vocab, opt, is_train=True, use_buckets=True,
+        valid_loader = DataServer([valid_data, valid_labels], vocab, vocab_char, opt, is_train=True, use_buckets=False,
                                   volatile=True)
 
         # Validation
         accs = []
         acc_len = 0
         for i, data in enumerate(valid_loader):
-            s1_var, s2_var, s3_var, label_var = data
-            distc, distd = selector.test_step(s1_var, s2_var, s3_var, label_var)
+            s1_var, s2_var, s3_var, c1_var, c2_var, c3_var, label_var = data
+            distc, distd = selector.test_step(s1_var, s2_var, s3_var, c1_var, c2_var, c3_var, label_var)
             acc = accuracy(distc, distd, label_var)
             accs.append(acc * s1_var.size(1))  # right numbers in a validation batch
             acc_len += s1_var.size(1)
@@ -158,12 +166,13 @@ for epoch in range(opt.num_epochs):
         # save_network(selector.encoder_b, 'encoder_candidates', epoch, save_dir)
 
     # Anneal learning rate:
-    if epochs_without_improvement == opt.start_annealing:
+    # if epochs_without_improvement == opt.start_annealing:
         # old_learning_rate = learning_rate
         # learning_rate *= opt.annealing_factor
         # update_learning_rate(selector.optimizer, learning_rate)
         # print('Learning rate has been updated from %.4f to %.4f' % (old_learning_rate, learning_rate))
-        scheduler.step(loss_val)
+    if epoch >= opt.start_early_stopping:
+        scheduler.step(acc_val)
 
     # Terminate training early, if no improvement has been observed for n epochs
     if epochs_without_improvement >= opt.patience:
@@ -179,8 +188,13 @@ print('Training procedure concluded after %d epochs total. Best validated epoch:
 if opt.pre_training:
     # Save pretrained embeddings and the vocab object
     pretrained_path = os.path.join(save_dir, 'pretrained.pkl')
+    pretrained_char_path = os.path.join(save_dir, 'pretrained_char.pkl')
     pretrained_embeddings = selector.encoder.embedding_table.weight.data
+    pretrained_embeddings_char = selector.encoder.embedding_table_char.weight.data
     with open(pretrained_path, 'wb') as f:
         pickle.dump((pretrained_embeddings, vocab), f)
     print('Pre-trained parameters saved to %s' % pretrained_path)
+    with open(pretrained_char_path, 'wb') as fc:
+        pickle.dump((pretrained_embeddings_char, vocab_char), fc)
+    print('Pre-trained character parameters saved to %s' % pretrained_char_path)
 

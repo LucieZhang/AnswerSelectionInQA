@@ -35,7 +35,7 @@ class Indexer(object):
         self.target_len = value
 
 
-def perform_bucketing(opt, labeled_pair_list, is_train=True):
+def perform_bucketing(opt, labeled_pair_list, vocab_char, is_train=True):
     # Groups the provided sentence pairs into the specified number of buckets of similar size based on the length of
     # their longest member.
     # Obtain sentence lengths
@@ -92,17 +92,40 @@ def perform_bucketing(opt, labeled_pair_list, is_train=True):
                 bucketed[l][0].append(labeled_pair_list[0][k])
                 bucketed[l][1].append(labeled_pair_list[1][k])
 
-    return buckets, bucketed
+    max_lens_char = []
+    for k in range(len(buckets)):
+        if is_train:
+            sentence_pair_lens = [(len(separate_chars(pair[0], vocab_char).split()), len(separate_chars(pair[1], vocab_char).split()),
+                                   len(separate_chars(pair[2], vocab_char).split())) for pair in bucketed[k][0]]
+            max_lens = [max(pair[0], pair[1], pair[2]) for pair in sentence_pair_lens]
+        else:
+            sentence_pair_lens = [(len(separate_chars(pair[0], vocab_char).split()),
+                                   len(separate_chars(pair[1], vocab_char).split())) for pair in bucketed[k][0]]
+            max_lens = [max(pair[0], pair[1]) for pair in sentence_pair_lens]
+
+        max_lens_char.append(max(max_lens))
+
+    return buckets, bucketed, max_lens_char
+
+
+def separate_chars(sent, vocab_char):
+    sent_list = list(sent)
+    char_list = []
+    for i, ch in enumerate(sent_list):
+        if ch != u" ":
+            char_list.append(ch + u" ")
+    sent_char = "".join(char_list[:vocab_char.target_len])
+    return sent_char
 
 
 def load_similarity_data(opt, corpus_location, corpus_name, is_train=True, is_dbqa=False):
 
     if is_train:
         df_sim = pd.read_table(corpus_location, sep='\t', header=None, encoding='utf-8', error_bad_lines=False,
-                               names=['question', 'triple1', 'triple2', 'label'], skip_blank_lines=True, engine='python', nrows=500)
+                               names=['question', 'triple1', 'triple2', 'label'], skip_blank_lines=True, engine='python', nrows=1000)
     else:
         df_sim = pd.read_table(corpus_location, sep='\t', header=None, encoding='utf-8', error_bad_lines=False,
-                               names=['question', 'triple1', 'label'], skip_blank_lines=True, engine='python', nrows=1010)
+                               names=['question', 'triple1', 'label'], skip_blank_lines=True, engine='python', nrows=1000)
 
     sim_data = [[], []]
     sim_sents = list()
@@ -110,10 +133,10 @@ def load_similarity_data(opt, corpus_location, corpus_name, is_train=True, is_db
     sent_lens = list()
     for i in range(len(df_sim['label'])):
 
-        sent_question = df_sim.iloc[i, 0].strip()
-        sent_triple1 = df_sim.iloc[i, 1].strip()
+        sent_question = str(df_sim.iloc[i, 0]).strip()
+        sent_triple1 = str(df_sim.iloc[i, 1]).strip()
         if is_train:
-            sent_triple2 = df_sim.iloc[i, 2].strip()
+            sent_triple2 = str(df_sim.iloc[i, 2]).strip()
 
         if is_dbqa:
             sent_a = str(sent_question)
@@ -148,7 +171,13 @@ def load_similarity_data(opt, corpus_location, corpus_name, is_train=True, is_db
         if is_train:
             label = int(df_sim.iloc[i, 3].replace(' ', ''))
         else:
-            label = int(df_sim.iloc[i, 2].replace(' ', ''))
+            if is_dbqa:
+                label = int(df_sim.iloc[i, 2])
+                if label == 0:
+                    label = -1
+            else:
+                label = int(df_sim.iloc[i, 2].replace(' ', ''))
+
 
         # Assemble a list of tuples containing the compared sentences, and track the max observed length
         if is_train:
@@ -184,7 +213,7 @@ def load_similarity_data(opt, corpus_location, corpus_name, is_train=True, is_db
 
     for i in range(len(sim_data[0])):
         pair = sim_data[0][i]  # for each i is a question or a kb triple
-        if len(pair[0].split()) > target_len or len(pair[1].split()) > target_len:
+        if len(pair[0].split()) > target_len or len(pair[1].split()) > target_len:  #pair[2]存在时的情况还为加
             if sent_select == 'drop':
                 continue
             elif sent_select is None:
